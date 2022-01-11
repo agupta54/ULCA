@@ -1,9 +1,12 @@
 package com.ulca.dataset.kakfa;
 
+import java.io.BufferedOutputStream;
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.RandomAccessFile;
 import java.math.BigInteger;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
@@ -265,6 +268,10 @@ public class DatasetParallelCorpusValidateIngest implements DatasetValidateInges
 			ParallelDatasetRowSchema rowSchema  = null;
 			
 			try {
+				if(numberOfRecords>10000) {
+					pseudoIngest(paramsSchema,datasetIngest);
+					
+				}
 				
 				rowSchema = mapper.readValue(dataRow, ParallelDatasetRowSchema.class);
 							
@@ -332,6 +339,37 @@ public class DatasetParallelCorpusValidateIngest implements DatasetValidateInges
 		String baseLocation = datasetIngest.getBaseLocation();
 		String md5hash = datasetIngest.getMd5hash();
 		DatasetType datasetType = datasetIngest.getDatasetType();
+		
+		RandomAccessFile raf = new RandomAccessFile("datasetIngest", "r");
+        long numSplits = 10; //from user input, extract it from args
+        long sourceSize = raf.length();
+        long bytesPerSplit = sourceSize/numSplits ;
+        long remainingBytes = sourceSize % numSplits;
+
+        int maxReadBufferSize = 8 * 1024; //8KB
+        for(int destIx=1; destIx <= numSplits; destIx++) {
+            BufferedOutputStream bw = new BufferedOutputStream(new FileOutputStream("split."+destIx));
+            if(bytesPerSplit > maxReadBufferSize) {
+                long numReads = bytesPerSplit/maxReadBufferSize;
+                long numRemainingRead = bytesPerSplit % maxReadBufferSize;
+                for(int i=0; i<numReads; i++) {
+                    readWrite(raf, bw, maxReadBufferSize);
+                }
+                if(numRemainingRead > 0) {
+                    readWrite(raf, bw, numRemainingRead);
+                }
+            }else {
+                readWrite(raf, bw, bytesPerSplit);
+            }
+            bw.close();
+        }
+        if(remainingBytes > 0) {
+            BufferedOutputStream bw = new BufferedOutputStream(new FileOutputStream("split."+(numSplits+1)));
+            readWrite(raf, bw, remainingBytes);
+            bw.close();
+        }
+            raf.close();
+		
 
 		ObjectMapper objectMapper = new ObjectMapper();
 		JSONObject record = new JSONObject(objectMapper.writeValueAsString(paramsSchema));
@@ -451,6 +489,14 @@ public class DatasetParallelCorpusValidateIngest implements DatasetValidateInges
 		
 		
 
+	}
+
+	private void readWrite(RandomAccessFile raf, BufferedOutputStream bw, long numRemainingRead) throws IOException {
+		byte[] buf = new byte[(int) numRemainingRead];
+        int val = raf.read(buf);
+        if(val != -1) {
+            bw.write(buf);
+        }		
 	}
 
 	public String getSha256Hash(String input) throws NoSuchAlgorithmException {
